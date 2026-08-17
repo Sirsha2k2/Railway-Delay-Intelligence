@@ -1,1 +1,913 @@
+# ============================================================
+# RAILWAY DELAY INTELLIGENCE
+# Statistical Analysis + Risk Segmentation + Power BI Dataset
+# ============================================================
 
+# ------------------------------------------------------------
+# 1. IMPORT LIBRARIES
+# ------------------------------------------------------------
+
+import pandas as pd
+import numpy as np
+
+from scipy.stats import (
+    spearmanr,
+    mannwhitneyu,
+    kruskal
+)
+
+import warnings
+warnings.filterwarnings("ignore")
+
+
+# ------------------------------------------------------------
+# 2. LOAD DATA
+# ------------------------------------------------------------
+
+df = pd.read_csv("railway_journeys.csv")
+
+print("=" * 60)
+print("DATASET OVERVIEW")
+print("=" * 60)
+
+print("Shape:", df.shape)
+print("\nFirst 5 rows:")
+print(df.head())
+
+print("\nColumn names:")
+print(df.columns.tolist())
+
+print("\nData types:")
+print(df.dtypes)
+
+
+# ------------------------------------------------------------
+# 3. STANDARDIZE COLUMN NAMES
+# ------------------------------------------------------------
+
+df.columns = (
+    df.columns
+    .str.strip()
+    .str.lower()
+    .str.replace(" ", "_")
+)
+
+print("\nStandardized columns:")
+print(df.columns.tolist())
+
+
+# ------------------------------------------------------------
+# 4. BASIC DATA CLEANING
+# ------------------------------------------------------------
+
+# Convert date column
+if "journey_date" in df.columns:
+    df["journey_date"] = pd.to_datetime(
+        df["journey_date"],
+        errors="coerce"
+    )
+
+# Convert numeric columns
+numeric_cols = [
+    "scheduled_duration",
+    "actual_duration",
+    "delay_minutes",
+    "distance_km",
+    "congestion_index"
+]
+
+for col in numeric_cols:
+    if col in df.columns:
+        df[col] = pd.to_numeric(
+            df[col],
+            errors="coerce"
+        )
+
+# Remove duplicate records
+before = len(df)
+
+df = df.drop_duplicates()
+
+after = len(df)
+
+print("\nDuplicates removed:", before - after)
+
+# Remove records without delay information
+if "delay_minutes" in df.columns:
+    df = df[df["delay_minutes"].notna()]
+
+print("Final dataset shape:", df.shape)
+
+
+# ------------------------------------------------------------
+# 5. BASIC DESCRIPTIVE STATISTICS
+# ------------------------------------------------------------
+
+print("\n" + "=" * 60)
+print("DESCRIPTIVE STATISTICS")
+print("=" * 60)
+
+print(df.describe(include="all"))
+
+
+# ------------------------------------------------------------
+# 6. MISSING VALUE ANALYSIS
+# ------------------------------------------------------------
+
+print("\n" + "=" * 60)
+print("MISSING VALUES")
+print("=" * 60)
+
+missing = (
+    df.isnull()
+    .sum()
+    .sort_values(ascending=False)
+)
+
+missing_pct = (
+    df.isnull()
+    .mean()
+    .mul(100)
+    .sort_values(ascending=False)
+)
+
+missing_summary = pd.DataFrame({
+    "missing_count": missing,
+    "missing_percentage": missing_pct
+})
+
+print(missing_summary)
+
+
+# ------------------------------------------------------------
+# 7. FEATURE ENGINEERING
+# ------------------------------------------------------------
+
+# Delayed journey
+df["is_delayed"] = (
+    df["delay_minutes"] > 5
+).astype(int)
+
+# Severe delay
+df["severe_delay"] = (
+    df["delay_minutes"] >= 30
+).astype(int)
+
+# Journey time difference
+if (
+    "actual_duration" in df.columns
+    and "scheduled_duration" in df.columns
+):
+
+    df["journey_time_difference"] = (
+        df["actual_duration"]
+        - df["scheduled_duration"]
+    )
+
+# Delay ratio
+if "scheduled_duration" in df.columns:
+
+    df["delay_ratio"] = np.where(
+        df["scheduled_duration"] > 0,
+        df["delay_minutes"]
+        / df["scheduled_duration"],
+        np.nan
+    )
+
+# Date features
+if "journey_date" in df.columns:
+
+    df["month"] = (
+        df["journey_date"]
+        .dt.month
+    )
+
+    df["year"] = (
+        df["journey_date"]
+        .dt.year
+    )
+
+    df["day_of_week"] = (
+        df["journey_date"]
+        .dt.day_name()
+    )
+
+    df["weekend"] = (
+        df["journey_date"]
+        .dt.dayofweek >= 5
+    ).astype(int)
+
+
+# ------------------------------------------------------------
+# 8. DEPARTURE TIME FEATURES
+# ------------------------------------------------------------
+
+if "departure_time" in df.columns:
+
+    departure_datetime = pd.to_datetime(
+        df["departure_time"],
+        errors="coerce"
+    )
+
+    df["hour"] = (
+        departure_datetime.dt.hour
+    )
+
+    # Peak hours
+    df["peak_hour"] = (
+        df["hour"].isin(
+            [7, 8, 9, 17, 18, 19, 20]
+        )
+    ).astype(int)
+
+
+# ------------------------------------------------------------
+# 9. DELAY SUMMARY
+# ------------------------------------------------------------
+
+print("\n" + "=" * 60)
+print("DELAY SUMMARY")
+print("=" * 60)
+
+total_journeys = len(df)
+
+delayed_journeys = (
+    df["is_delayed"].sum()
+)
+
+severe_delays = (
+    df["severe_delay"].sum()
+)
+
+delay_rate = (
+    delayed_journeys
+    / total_journeys
+    * 100
+)
+
+severe_delay_rate = (
+    severe_delays
+    / total_journeys
+    * 100
+)
+
+print("Total journeys:", total_journeys)
+print("Delayed journeys:", delayed_journeys)
+print("Severe delays:", severe_delays)
+print(f"Delay rate: {delay_rate:.2f}%")
+print(f"Severe delay rate: {severe_delay_rate:.2f}%")
+print(
+    f"Average delay: "
+    f"{df['delay_minutes'].mean():.2f} minutes"
+)
+
+print(
+    f"Median delay: "
+    f"{df['delay_minutes'].median():.2f} minutes"
+)
+
+
+# ------------------------------------------------------------
+# 10. DELAY BY TRAIN TYPE
+# ------------------------------------------------------------
+
+if "train_type" in df.columns:
+
+    train_summary = (
+        df.groupby("train_type")
+        .agg(
+            journeys=("delay_minutes", "size"),
+            avg_delay=("delay_minutes", "mean"),
+            median_delay=("delay_minutes", "median"),
+            delay_rate=("is_delayed", "mean")
+        )
+        .reset_index()
+    )
+
+    train_summary["delay_rate"] *= 100
+
+    train_summary = train_summary.sort_values(
+        "delay_rate",
+        ascending=False
+    )
+
+    print("\n" + "=" * 60)
+    print("DELAY BY TRAIN TYPE")
+    print("=" * 60)
+
+    print(train_summary)
+
+
+# ------------------------------------------------------------
+# 11. DELAY BY WEATHER
+# ------------------------------------------------------------
+
+if "weather_condition" in df.columns:
+
+    weather_summary = (
+        df.groupby("weather_condition")
+        .agg(
+            journeys=("delay_minutes", "size"),
+            avg_delay=("delay_minutes", "mean"),
+            median_delay=("delay_minutes", "median"),
+            delay_rate=("is_delayed", "mean")
+        )
+        .reset_index()
+    )
+
+    weather_summary["delay_rate"] *= 100
+
+    weather_summary = weather_summary.sort_values(
+        "delay_rate",
+        ascending=False
+    )
+
+    print("\n" + "=" * 60)
+    print("DELAY BY WEATHER")
+    print("=" * 60)
+
+    print(weather_summary)
+
+
+# ------------------------------------------------------------
+# 12. CONGESTION SEGMENTATION
+# ------------------------------------------------------------
+
+if "congestion_index" in df.columns:
+
+    df["congestion_level"] = pd.cut(
+        df["congestion_index"],
+        bins=[
+            -np.inf,
+            30,
+            70,
+            np.inf
+        ],
+        labels=[
+            "Low",
+            "Medium",
+            "High"
+        ]
+    )
+
+    congestion_summary = (
+        df.groupby(
+            "congestion_level",
+            observed=True
+        )
+        .agg(
+            journeys=("delay_minutes", "size"),
+            avg_delay=("delay_minutes", "mean"),
+            median_delay=("delay_minutes", "median"),
+            delay_rate=("is_delayed", "mean")
+        )
+        .reset_index()
+    )
+
+    congestion_summary["delay_rate"] *= 100
+
+    print("\n" + "=" * 60)
+    print("DELAY BY CONGESTION")
+    print("=" * 60)
+
+    print(congestion_summary)
+
+
+# ------------------------------------------------------------
+# 13. DELAY RISK CATEGORIES
+# ------------------------------------------------------------
+
+df["delay_risk"] = pd.cut(
+    df["delay_minutes"],
+    bins=[
+        -np.inf,
+        5,
+        15,
+        30,
+        np.inf
+    ],
+    labels=[
+        "On-Time",
+        "Minor Delay",
+        "Moderate Delay",
+        "Severe Delay"
+    ]
+)
+
+risk_summary = (
+    df.groupby(
+        "delay_risk",
+        observed=True
+    )
+    .agg(
+        journeys=("delay_minutes", "size"),
+        avg_delay=("delay_minutes", "mean"),
+        median_delay=("delay_minutes", "median")
+    )
+    .reset_index()
+)
+
+risk_summary["percentage"] = (
+    risk_summary["journeys"]
+    / total_journeys
+    * 100
+)
+
+print("\n" + "=" * 60)
+print("DELAY RISK DISTRIBUTION")
+print("=" * 60)
+
+print(risk_summary)
+
+
+# ------------------------------------------------------------
+# 14. SPEARMAN CORRELATION
+# ------------------------------------------------------------
+
+print("\n" + "=" * 60)
+print("SPEARMAN CORRELATION")
+print("=" * 60)
+
+correlation_variables = [
+    "congestion_index",
+    "distance_km",
+    "scheduled_duration",
+    "actual_duration",
+    "delay_ratio"
+]
+
+correlation_results = []
+
+for col in correlation_variables:
+
+    if col in df.columns:
+
+        temp = df[
+            [col, "delay_minutes"]
+        ].dropna()
+
+        if len(temp) > 2:
+
+            rho, p_value = spearmanr(
+                temp[col],
+                temp["delay_minutes"]
+            )
+
+            correlation_results.append({
+                "variable": col,
+                "spearman_rho": rho,
+                "p_value": p_value,
+                "significant": (
+                    p_value < 0.05
+                )
+            })
+
+spearman_results = pd.DataFrame(
+    correlation_results
+)
+
+print(spearman_results)
+
+
+# ------------------------------------------------------------
+# 15. MANN-WHITNEY U TEST
+# ------------------------------------------------------------
+
+print("\n" + "=" * 60)
+print("MANN-WHITNEY U TEST")
+print("=" * 60)
+
+if "actual_duration" in df.columns:
+
+    delayed_times = (
+        df.loc[
+            df["is_delayed"] == 1,
+            "actual_duration"
+        ]
+        .dropna()
+    )
+
+    on_time_times = (
+        df.loc[
+            df["is_delayed"] == 0,
+            "actual_duration"
+        ]
+        .dropna()
+    )
+
+    if (
+        len(delayed_times) > 0
+        and len(on_time_times) > 0
+    ):
+
+        u_stat, p_value = mannwhitneyu(
+            delayed_times,
+            on_time_times,
+            alternative="two-sided"
+        )
+
+        print(
+            "U statistic:",
+            u_stat
+        )
+
+        print(
+            "p-value:",
+            p_value
+        )
+
+        if p_value < 0.05:
+            print(
+                "Result: Significant difference "
+                "in journey-time distributions."
+            )
+        else:
+            print(
+                "Result: No significant difference."
+            )
+
+
+# ------------------------------------------------------------
+# 16. KRUSKAL-WALLIS — TRAIN TYPE
+# ------------------------------------------------------------
+
+print("\n" + "=" * 60)
+print("KRUSKAL-WALLIS TEST — TRAIN TYPE")
+print("=" * 60)
+
+if "train_type" in df.columns:
+
+    train_groups = []
+
+    train_names = []
+
+    for name, group in df.groupby(
+        "train_type"
+    ):
+
+        values = (
+            group["actual_duration"]
+            .dropna()
+        )
+
+        if len(values) >= 20:
+
+            train_groups.append(values)
+            train_names.append(name)
+
+    if len(train_groups) >= 2:
+
+        h_stat, p_value = kruskal(
+            *train_groups
+        )
+
+        print(
+            "Groups:",
+            train_names
+        )
+
+        print(
+            "H statistic:",
+            h_stat
+        )
+
+        print(
+            "p-value:",
+            p_value
+        )
+
+        if p_value < 0.05:
+            print(
+                "Result: Significant differences "
+                "exist between train-type distributions."
+            )
+        else:
+            print(
+                "Result: No significant difference."
+            )
+
+
+# ------------------------------------------------------------
+# 17. KRUSKAL-WALLIS — WEATHER
+# ------------------------------------------------------------
+
+print("\n" + "=" * 60)
+print("KRUSKAL-WALLIS TEST — WEATHER")
+print("=" * 60)
+
+if "weather_condition" in df.columns:
+
+    weather_groups = []
+
+    weather_names = []
+
+    for name, group in df.groupby(
+        "weather_condition"
+    ):
+
+        values = (
+            group["actual_duration"]
+            .dropna()
+        )
+
+        if len(values) >= 20:
+
+            weather_groups.append(values)
+            weather_names.append(name)
+
+    if len(weather_groups) >= 2:
+
+        h_stat, p_value = kruskal(
+            *weather_groups
+        )
+
+        print(
+            "Groups:",
+            weather_names
+        )
+
+        print(
+            "H statistic:",
+            h_stat
+        )
+
+        print(
+            "p-value:",
+            p_value
+        )
+
+        if p_value < 0.05:
+            print(
+                "Result: Significant differences "
+                "exist between weather conditions."
+            )
+        else:
+            print(
+                "Result: No significant difference."
+            )
+
+
+# ------------------------------------------------------------
+# 18. WEATHER × CONGESTION RISK SEGMENTS
+# ------------------------------------------------------------
+
+if (
+    "weather_condition" in df.columns
+    and "congestion_level" in df.columns
+):
+
+    segment_summary = (
+        df.groupby(
+            [
+                "weather_condition",
+                "congestion_level"
+            ],
+            observed=True
+        )
+        .agg(
+            journeys=("delay_minutes", "size"),
+            avg_delay=("delay_minutes", "mean"),
+            median_delay=("delay_minutes", "median"),
+            delay_rate=("is_delayed", "mean"),
+            severe_delay_rate=("severe_delay", "mean"),
+            avg_journey_time=(
+                "actual_duration",
+                "mean"
+            )
+        )
+        .reset_index()
+    )
+
+    segment_summary["delay_rate"] *= 100
+
+    segment_summary["severe_delay_rate"] *= 100
+
+    segment_summary = segment_summary.sort_values(
+        "delay_rate",
+        ascending=False
+    )
+
+    print("\n" + "=" * 60)
+    print("WEATHER × CONGESTION RISK SEGMENTS")
+    print("=" * 60)
+
+    print(segment_summary)
+
+
+# ------------------------------------------------------------
+# 19. TRAIN TYPE × WEATHER × CONGESTION SEGMENTS
+# ------------------------------------------------------------
+
+if all(
+    col in df.columns
+    for col in [
+        "train_type",
+        "weather_condition",
+        "congestion_level"
+    ]
+):
+
+    risk_segments = (
+        df.groupby(
+            [
+                "train_type",
+                "weather_condition",
+                "congestion_level"
+            ],
+            observed=True
+        )
+        .agg(
+            journeys=("delay_minutes", "size"),
+            avg_delay=("delay_minutes", "mean"),
+            median_delay=("delay_minutes", "median"),
+            delay_rate=("is_delayed", "mean"),
+            severe_delay_rate=("severe_delay", "mean"),
+            avg_journey_time=(
+                "actual_duration",
+                "mean"
+            )
+        )
+        .reset_index()
+    )
+
+    risk_segments["delay_rate"] *= 100
+
+    risk_segments["severe_delay_rate"] *= 100
+
+    # Only sufficiently large segments
+    risk_segments = risk_segments[
+        risk_segments["journeys"] >= 100
+    ]
+
+    risk_segments = risk_segments.sort_values(
+        "delay_rate",
+        ascending=False
+    )
+
+    print("\n" + "=" * 60)
+    print("TOP HIGH-RISK SEGMENTS")
+    print("=" * 60)
+
+    print(
+        risk_segments.head(10)
+    )
+
+
+# ------------------------------------------------------------
+# 20. HIGH VS LOW CONGESTION COMPARISON
+# ------------------------------------------------------------
+
+print("\n" + "=" * 60)
+print("CONGESTION IMPACT")
+print("=" * 60)
+
+if "congestion_level" in df.columns:
+
+    high_congestion_delay = (
+        df.loc[
+            df["congestion_level"] == "High",
+            "delay_minutes"
+        ]
+        .mean()
+    )
+
+    low_congestion_delay = (
+        df.loc[
+            df["congestion_level"] == "Low",
+            "delay_minutes"
+        ]
+        .mean()
+    )
+
+    if low_congestion_delay != 0:
+
+        difference_pct = (
+            (
+                high_congestion_delay
+                - low_congestion_delay
+            )
+            / low_congestion_delay
+        ) * 100
+
+        print(
+            f"High congestion average delay: "
+            f"{high_congestion_delay:.2f}"
+        )
+
+        print(
+            f"Low congestion average delay: "
+            f"{low_congestion_delay:.2f}"
+        )
+
+        print(
+            f"Relative difference: "
+            f"{difference_pct:.2f}%"
+        )
+
+
+# ------------------------------------------------------------
+# 21. POWER BI DATASET
+# ------------------------------------------------------------
+
+powerbi_group_columns = [
+    "train_type",
+    "weather_condition",
+    "congestion_level",
+    "delay_risk",
+    "day_of_week",
+    "peak_hour"
+]
+
+powerbi_group_columns = [
+    col
+    for col in powerbi_group_columns
+    if col in df.columns
+]
+
+powerbi_data = (
+    df.groupby(
+        powerbi_group_columns,
+        observed=True
+    )
+    .agg(
+        journeys=("delay_minutes", "size"),
+        avg_delay=("delay_minutes", "mean"),
+        median_delay=("delay_minutes", "median"),
+        max_delay=("delay_minutes", "max"),
+        delay_rate=("is_delayed", "mean"),
+        severe_delay_rate=("severe_delay", "mean"),
+        avg_journey_time=(
+            "actual_duration",
+            "mean"
+        )
+    )
+    .reset_index()
+)
+
+powerbi_data["delay_rate"] *= 100
+
+powerbi_data["severe_delay_rate"] *= 100
+
+
+# ------------------------------------------------------------
+# 22. SAVE OUTPUT FILES
+# ------------------------------------------------------------
+
+powerbi_data.to_csv(
+    "railway_powerbi_dataset.csv",
+    index=False
+)
+
+df.to_csv(
+    "railway_cleaned_data.csv",
+    index=False
+)
+
+spearman_results.to_csv(
+    "spearman_results.csv",
+    index=False
+)
+
+risk_summary.to_csv(
+    "delay_risk_summary.csv",
+    index=False
+)
+
+
+# ------------------------------------------------------------
+# 23. FINAL SUMMARY
+# ------------------------------------------------------------
+
+print("\n" + "=" * 60)
+print("PROJECT COMPLETE")
+print("=" * 60)
+
+print(
+    f"Total journeys analyzed: {len(df):,}"
+)
+
+print(
+    f"Average delay: "
+    f"{df['delay_minutes'].mean():.2f} minutes"
+)
+
+print(
+    f"Median delay: "
+    f"{df['delay_minutes'].median():.2f} minutes"
+)
+
+print(
+    f"Delay rate: "
+    f"{df['is_delayed'].mean() * 100:.2f}%"
+)
+
+print(
+    "\nFiles generated:"
+)
+
+print("1. railway_cleaned_data.csv")
+print("2. railway_powerbi_dataset.csv")
+print("3. spearman_results.csv")
+print("4. delay_risk_summary.csv")
+
+print("\nAll statistical analysis completed.")
